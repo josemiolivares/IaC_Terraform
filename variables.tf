@@ -3,13 +3,13 @@
 # =============================================================
 
 variable "aws_region" {
-  description = "Regió AWS on desplegar la infraestructura"
+  description = "Regio AWS on desplegar la infraestructura"
   type        = string
   default     = "us-east-1"
 }
 
 variable "project_name" {
-  description = "Nom del projecte (s'usa com a prefix per als recursos)"
+  description = "Nom del projecte (s_usa com a prefix per als recursos)"
   type        = string
   default     = "practica-tf"
 }
@@ -21,7 +21,7 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "CIDRs per a les subnets públiques (una per AZ)"
+  description = "CIDRs per a les subnets publiques (una per AZ)"
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
@@ -33,20 +33,20 @@ variable "private_subnet_cidrs" {
 }
 
 variable "instance_type" {
-  description = "Tipus d'instància EC2"
+  description = "Tipus d_instancia EC2"
   type        = string
   default     = "t3.micro"
 }
 
 variable "ssh_public_key" {
-  description = "Clau pública SSH per accedir a les instàncies"
+  description = "Clau publica SSH per accedir a les instancies"
   type        = string
   # Afegeix la teua clau pública aquí o passa-la via terraform.tfvars
   # Exemple: ssh-rsa AAAA... user@host
 }
 
 variable "domain_name" {
-  description = "Nom de domini per al certificat SSL (ha d'existir a Route 53)"
+  description = "Nom de domini per al certificat SSL (ha d_existir a Route 53)"
   type        = string
   # Exemple: "example.com"
 }
