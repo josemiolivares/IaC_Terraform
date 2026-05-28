@@ -17,13 +17,13 @@ instance_type = "t3.micro"
 ssh_public_key = "ssh-ed25519 AAAA... el-teu-usuari@host"
 
 # Nom de domini que has de tenir registrat i amb hosted zone a Route 53
-domain_name = "example.com"
+domain_name = "josemolivares.aws.amazon.com"
 
 health_check_path = "/"
 
 common_tags = {
-  Project     = "practica-terraform-aws"
+  Project     = "practica-IaC-terraform-aws"
   Environment = "dev"
   ManagedBy   = "Terraform"
-  Owner       = "el-teu-nom"
+  Owner       = "Josep Olivares"
 }
