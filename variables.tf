@@ -67,3 +67,46 @@ variable "common_tags" {
     ManagedBy   = "Terraform"
   }
 }
+
+# Parámetros para la base de datos (RDS MySQL)
+variable "db_name" {
+description = "Nombre de la base de datos de WordPress en RDS"
+type = string
+default = "wordpress"
+}
+variable "db_username" {
+description = "Usuario administrador de la base de datos RDS"
+type = string
+default = "admin"
+}
+variable "db_password" {
+description = "Contraseña del usuario de la base de datos RDS"
+type = string
+default = "PAssw0rd1234" # En entorno real, usar una contraseña segura y no hardcodeada
+sensitive = true # Marcar como sensible para no mostrar en salida de Terraform
+}
+
+variable "DOMAIN_NAME" {
+  type        = string
+  description = "Dominio para la instalación de WordPress"
+  default     = "wordpress-iac-tf.midemo.com"
+}
+
+variable "DEMO_USERNAME" {
+  type        = string
+  description = "Usuario administrador para WordPress"
+  default     = "wpadmin"
+}
+
+variable "DEMO_PASSWORD" {
+  type        = string
+  description = "Contraseña administrador para WordPress"
+  default     = "wppassword123"
+  sensitive = true # Marcar como sensible para no mostrar en salida de Terraform
+}
+
+variable "DEMO_EMAIL" {
+  type        = string
+  description = "Email administrador para WordPress"
+  default     = "admin@midemo.com"
+}
