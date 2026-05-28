@@ -276,9 +276,10 @@ resource "aws_key_pair" "main" {
 
 resource "aws_instance" "web" {
   count = 2
-
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = var.instance_type
+  ami           = "ami-0c101f26f147fa7fd"
+  instance_type = "t3.micro"
+ # ami                    = data.aws_ami.amazon_linux.id
+ # instance_type          = var.instance_type
   key_name               = aws_key_pair.main.key_name
   subnet_id              = aws_subnet.private[count.index].id
   vpc_security_group_ids = [aws_security_group.ec2.id]
