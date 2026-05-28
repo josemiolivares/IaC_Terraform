@@ -92,7 +92,8 @@ resource "aws_subnet" "private" {
 # -------------------------------------------------------------
 
 resource "aws_eip" "nat" {
-  count  = 2
+  count  = 1
+#  1 per estalviar
   domain = "vpc"
 
   tags = merge(var.common_tags, {
@@ -107,7 +108,8 @@ resource "aws_eip" "nat" {
 # -------------------------------------------------------------
 
 resource "aws_nat_gateway" "main" {
-  count = 2
+  count = 1
+# posem 1 per a reduir costos en az1 public
 
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
