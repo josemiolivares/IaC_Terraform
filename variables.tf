@@ -48,7 +48,7 @@ variable "ssh_public_key" {
 variable "domain_name" {
   description = "Nom de domini per al certificat SSL (ha d_existir a Route 53)"
   type        = string
-  default = josemiolivares.aws.amazon.com
+  default = awstf1.josemiolivares.net
   # Exemple: "example.com"
 }
 
