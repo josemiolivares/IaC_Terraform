@@ -89,7 +89,7 @@ sensitive = true # Marcar como sensible para no mostrar en salida de Terraform
 variable "DOMAIN_NAME" {
   type        = string
   description = "Dominio para la instalación de WordPress"
-  default     = "wordpress-iac-tf.midemo.com"
+  default     = "wordpress-iac-tf.josemolivares.net"
 }
 
 variable "DEMO_USERNAME" {
@@ -108,5 +108,5 @@ variable "DEMO_PASSWORD" {
 variable "DEMO_EMAIL" {
   type        = string
   description = "Email administrador para WordPress"
-  default     = "admin@midemo.com"
+  default     = "josemiolivares@gmail.com"
 }
