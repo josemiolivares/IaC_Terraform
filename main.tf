@@ -187,11 +187,11 @@ resource "aws_route_table_association" "private" {
 
 resource "aws_security_group" "alb" {
   name        = "${var.project_name}-sg-alb"
-  description = "Permet HTTP (redirecció) i HTTPS des d'internet"
+  description = "Permet HTTP (redireccio) i HTTPS des d_internet"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "HTTP des d'internet (redirecció a HTTPS)"
+    description = "HTTP des d_internet (redireccio a HTTPS)"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -199,7 +199,7 @@ resource "aws_security_group" "alb" {
   }
 
   ingress {
-    description = "HTTPS des d'internet"
+    description = "HTTPS des d_internet"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -207,7 +207,7 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    description = "Tot el tràfic de sortida"
+    description = "Tot el trafic de sortida"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
@@ -225,7 +225,7 @@ resource "aws_security_group" "alb" {
 
 resource "aws_security_group" "ec2" {
   name        = "${var.project_name}-sg-ec2"
-  description = "Permet tràfic HTTP des del ALB i SSH des de bastió"
+  description = "Permet trafic HTTP des del ALB i SSH des de bastio"
   vpc_id      = aws_vpc.main.id
 
   ingress {
@@ -245,7 +245,7 @@ resource "aws_security_group" "ec2" {
   }
 
   egress {
-    description = "Tot el tràfic de sortida"
+    description = "Tot el trafic de sortida"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
