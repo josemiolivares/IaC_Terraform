@@ -519,7 +519,7 @@ description = "MySQL desde Web SG"
 from_port = 3306
 to_port = 3306
 protocol = "tcp"
-security_groups = [aws_security_group.web_sg.id] # solo desde instancias con web_sg
+security_groups = [aws_security_group.ec2.id] # solo desde instancias con web_sg
 }
 
 egress {
@@ -544,7 +544,7 @@ description = "NFS desde Web SG"
 from_port = 2049
 to_port = 2049
 protocol = "tcp"
-security_groups = [aws_security_group.web_sg.id]
+security_groups = [aws_security_group.ec2.id]
 }
 
 egress {
