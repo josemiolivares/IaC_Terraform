@@ -458,3 +458,51 @@ resource "aws_lb_listener" "https" {
     Name = "${var.project_name}-listener-https"
   })
 }
+
+# Sistema de archivos EFS
+resource "aws_efs_file_system" "wordpress_fs" {
+provisioned_throughput_in_mibps = 0
+throughput_mode = "bursting"
+encrypted = false
+tags = {
+Name = "${var.project_name}-efs"
+}
+}
+
+# Crear un Mount Target de EFS en cada subred privada
+resource "aws_efs_mount_target" "efs_mount" {
+count = length(var.private_subnets_cidrs)
+file_system_id = aws_efs_file_system.wordpress_fs.id
+subnet_id = aws_subnet.private[count.index].id
+security_groups = [aws_security_group.efs_sg.id]
+}
+
+
+# Subnet Group para RDS (usar subredes privadas)
+resource "aws_db_subnet_group" "rds_subnets" {
+name = "${var.project_name}-rds-subnetgrp"
+subnet_ids = aws_subnet.private[*].id
+tags = {
+Name = "${var.project_name}-rds-subnetgrp"
+}
+}
+
+resource "aws_db_instance" "wordpress_db" {
+  identifier             = "${var.project_name}-db"
+  engine                 = "mysql"
+  engine_version         = "8.0"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password  
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnets.name
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  publicly_accessible    = false
+  skip_final_snapshot    = true
+  deletion_protection    = false
+
+  tags = {
+    Name = "${var.project_name}-db"
+  }
+}
