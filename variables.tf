@@ -11,7 +11,7 @@ variable "aws_region" {
 variable "project_name" {
   description = "Nom del projecte (s_usa com a prefix per als recursos)"
   type        = string
-  default     = "practica-tf"
+  default     = "aws-tf-josemi"
 }
 
 variable "vpc_cidr" {
@@ -48,6 +48,7 @@ variable "ssh_public_key" {
 variable "domain_name" {
   description = "Nom de domini per al certificat SSL (ha d_existir a Route 53)"
   type        = string
+  default = josemiolivares.aws.amazon.com
   # Exemple: "example.com"
 }
 
