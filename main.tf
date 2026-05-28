@@ -294,20 +294,12 @@ resource "aws_instance" "web" {
 # NOTA: Si tens un domini propi, descomenta el bloc següent i
 # ajusta la variable domain_name. ACM validarà via DNS.
 # Si no tens domini, utilitza un certificat autosignat (veure README).
-
-resource "aws_acm_certificate" "main" {
-  domain_name               = var.domain_name
-  subject_alternative_names = ["www.${var.domain_name}"]
-  validation_method         = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-cert"
-  })
+data "aws_acm_certificate" "main" {
+  domain      = "josemolivares.aws.amazon.com"
+  statuses    = ["ISSUED"]
+  most_recent = true
 }
+
 
 # Validació DNS del certificat (requereix que gestionis el DNS)
 resource "aws_acm_certificate_validation" "main" {
