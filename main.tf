@@ -1,0 +1,602 @@
+# =============================================================
+# main.tf - Infraestructura AWS amb HA en 2 AZs i HTTPS
+# =============================================================
+
+terraform {
+  required_version = ">= 1.3.0"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# -------------------------------------------------------------
+# DATA SOURCES
+# -------------------------------------------------------------
+
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+
+# -------------------------------------------------------------
+# VPC
+# -------------------------------------------------------------
+
+resource "aws_vpc" "main" {
+ 
+  cidr_block           = var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-vpc"
+  })
+}
+
+# -------------------------------------------------------------
+# INTERNET GATEWAY
+# -------------------------------------------------------------
+
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-igw"
+  })
+}
+
+# -------------------------------------------------------------
+# SUBNETS PÚBLIQUES (una per AZ)
+# -------------------------------------------------------------
+
+resource "aws_subnet" "public" {
+  count = 2
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidrs[count.index]
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-public-subnet-${count.index + 1}"
+    AZ   = data.aws_availability_zones.available.names[count.index]
+  })
+}
+
+# -------------------------------------------------------------
+# SUBNETS PRIVADES (una per AZ)
+# -------------------------------------------------------------
+
+resource "aws_subnet" "private" {
+  count = 2
+
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = var.private_subnet_cidrs[count.index]
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-private-subnet-${count.index + 1}"
+    AZ   = data.aws_availability_zones.available.names[count.index]
+  })
+}
+
+# -------------------------------------------------------------
+# ELASTIC IPs per NAT Gateways
+# -------------------------------------------------------------
+
+resource "aws_eip" "nat" {
+  count  = 1
+#  1 per estalviar
+  domain = "vpc"
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-eip-nat-${count.index + 1}"
+  })
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+# -------------------------------------------------------------
+# NAT GATEWAYS (un per AZ per a HA real)
+# -------------------------------------------------------------
+
+resource "aws_nat_gateway" "main" {
+  count = 1
+# posem 1 per a reduir costos en az1 public
+
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-nat-gw-${count.index + 1}"
+  })
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+# -------------------------------------------------------------
+# TAULES DE RUTES PÚBLIQUES
+# -------------------------------------------------------------
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-rt-public"
+  })
+}
+
+resource "aws_route_table_association" "public" {
+  count = 2
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# -------------------------------------------------------------
+# TAULES DE RUTES PRIVADES (una per AZ)
+# -------------------------------------------------------------
+
+resource "aws_route_table" "private" {
+  count  = 2
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main[0].id #només tenim 1, si no [count.index]
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-rt-private-${count.index + 1}"
+  })
+}
+
+resource "aws_route_table_association" "private" {
+  count = 2
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[count.index].id
+}
+
+# -------------------------------------------------------------
+# SECURITY GROUP - ALB
+# -------------------------------------------------------------
+
+resource "aws_security_group" "alb" {
+  name        = "${var.project_name}-sg-alb"
+  description = "Permet HTTP (redireccio) i HTTPS des d_internet"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTP des d_internet (redireccio a HTTPS)"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS des d_internet"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Tot el trafic de sortida"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-sg-alb"
+  })
+}
+
+# -------------------------------------------------------------
+# SECURITY GROUP - Instàncies EC2
+# -------------------------------------------------------------
+
+resource "aws_security_group" "ec2" {
+  name        = "${var.project_name}-sg-ec2"
+  description = "Permet trafic HTTP des del ALB i SSH des de bastio"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "HTTP des del ALB"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  ingress {
+    description = "SSH des de la VPC"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
+  egress {
+    description = "Tot el trafic de sortida"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-sg-ec2"
+  })
+}
+
+# -------------------------------------------------------------
+# KEY PAIR
+# -------------------------------------------------------------
+
+resource "aws_key_pair" "main" {
+  key_name   = "${var.project_name}-key"
+  public_key = var.ssh_public_key
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-key"
+  })
+}
+
+
+# -------------------------------------------------------------
+# ACM - Certificat SSL/TLS
+# (Opció A: certificat autogestionat importat)
+# (Opció B: certificat AWS Certificate Manager - recomanat)
+# -------------------------------------------------------------
+
+# NOTA: Si tens un domini propi, descomenta el bloc següent i
+# ajusta la variable domain_name. ACM validarà via DNS.
+# Si no tens domini, utilitza un certificat autosignat (veure README).
+
+resource "aws_acm_certificate" "main" {
+  domain_name               = var.domain_name
+  subject_alternative_names = ["www.${var.domain_name}"]
+  validation_method         = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-cert"
+  })
+}
+/*
+# Validació DNS del certificat (requereix que gestionis el DNS)
+resource "aws_acm_certificate_validation" "main" {
+  certificate_arn         = aws_acm_certificate.main.arn
+  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+
+  timeouts {
+    create = "10m"
+  }
+}
+*/
+# -------------------------------------------------------------
+# ROUTE 53 (si uses hosted zone propia)
+# -------------------------------------------------------------
+
+data "aws_route53_zone" "main" {
+  name         = var.domain_name
+  private_zone = false
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = {
+    for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
+      name   = dvo.resource_record_name
+      record = dvo.resource_record_value
+      type   = dvo.resource_record_type
+    }
+  }
+
+  allow_overwrite = true
+  name            = each.value.name
+  records         = [each.value.record]
+  ttl             = 60
+  type            = each.value.type
+  zone_id         = data.aws_route53_zone.main.zone_id
+}
+
+resource "aws_route53_record" "alb" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "alb_www" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = "www.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id                = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
+}
+
+# -------------------------------------------------------------
+# APPLICATION LOAD BALANCER
+# -------------------------------------------------------------
+
+resource "aws_lb" "main" {
+  name               = "${var.project_name}-alb"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = aws_subnet.public[*].id
+
+  enable_deletion_protection = false
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-alb"
+  })
+}
+
+# -------------------------------------------------------------
+# TARGET GROUP
+# -------------------------------------------------------------
+
+resource "aws_lb_target_group" "web" {
+  name     = "${var.project_name}-tg-web"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.main.id
+
+  health_check {
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    timeout             = 5
+    interval            = 30
+    path                = var.health_check_path
+    port                = "traffic-port"
+    protocol            = "HTTP"
+    matcher             = "200-299"
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-tg-web"
+  })
+}
+
+
+# -------------------------------------------------------------
+# LISTENER HTTP → redirecció a HTTPS
+# -------------------------------------------------------------
+
+resource "aws_lb_listener" "http_redirect" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type = "redirect"
+
+    redirect {
+      port        = "443"
+      protocol    = "HTTPS"
+      status_code = "HTTP_301"
+    }
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-listener-http"
+  })
+}
+
+# -------------------------------------------------------------
+# LISTENER HTTPS
+# -------------------------------------------------------------
+
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 443
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
+  certificate_arn   =  var.certImportatarn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.project_name}-listener-https"
+  })
+}
+
+# Sistema de archivos EFS
+resource "aws_efs_file_system" "wordpress_fs" {
+provisioned_throughput_in_mibps = 0
+throughput_mode = "bursting"
+encrypted = false
+tags = {
+Name = "${var.project_name}-efs"
+}
+}
+
+# Crear un Mount Target de EFS en cada subred privada
+resource "aws_efs_mount_target" "efs_mount" {
+count = length(var.private_subnet_cidrs)
+file_system_id = aws_efs_file_system.wordpress_fs.id
+subnet_id = aws_subnet.private[count.index].id
+security_groups = [aws_security_group.efs_sg.id]
+}
+
+
+# Subnet Group para RDS (usar subredes privadas)
+resource "aws_db_subnet_group" "rds_subnets" {
+name = "${var.project_name}-rds-subnetgrp"
+subnet_ids = aws_subnet.private[*].id
+tags = {
+Name = "${var.project_name}-rds-subnetgrp"
+}
+}
+
+
+
+# SG para la base de datos (RDS)
+resource "aws_security_group" "db_sg" {
+name = "${var.project_name}-db-sg"
+description = "Permitir acceso MySQL desde servidores web"
+vpc_id = aws_vpc.main.id
+
+ingress {
+description = "MySQL desde Web SG"
+from_port = 3306
+to_port = 3306
+protocol = "tcp"
+security_groups = [aws_security_group.ec2.id] # solo desde instancias con web_sg
+}
+
+egress {
+from_port = 0
+to_port = 0
+protocol = "-1"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+tags = {
+Name = "${var.project_name}-db-sg"
+}
+}
+
+# SG para EFS (sistema de archivos)
+resource "aws_security_group" "efs_sg" {
+name = "${var.project_name}-efs-sg"
+description = "Permitir acceso NFS (EFS) desde servidores web"
+vpc_id = aws_vpc.main.id
+ingress {
+description = "NFS desde Web SG"
+from_port = 2049
+to_port = 2049
+protocol = "tcp"
+security_groups = [aws_security_group.ec2.id]
+}
+
+egress {
+from_port = 0
+to_port = 0
+protocol = "-1"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+
+tags = {
+Name = "${var.project_name}-efs-sg"
+}
+}
+
+
+
+resource "aws_db_instance" "wordpress_db" {
+  identifier             = "${var.project_name}-db"
+  engine                 = "mysql"
+  engine_version         = "8.0"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password  
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnets.name
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  publicly_accessible    = false
+  skip_final_snapshot    = true
+  deletion_protection    = false
+
+  tags = {
+    Name = "${var.project_name}-db"
+  }
+}
+
+# Obtener la última AMI de Amazon Linux 2023 desde el Parameter Store de AWS
+data "aws_ssm_parameter" "amzn2" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+}
+
+
+
+# Launch Template para instancias web
+resource "aws_launch_template" "web_lt" {
+name_prefix = "${var.project_name}-lt-"
+image_id = data.aws_ssm_parameter.amzn2.value
+instance_type = var.instance_type
+key_name = var.key_name != "" ? var.key_name : null
+# Solo asignamos key pair si se proporcionó; si var.key_name es "", ponemos null (ninguna key)
+vpc_security_group_ids = [aws_security_group.ec2.id]
+iam_instance_profile {
+  name = "LabInstanceProfile"
+}
+user_data = base64encode(templatefile("${path.module}/userdata/staging-web.sh", {
+  efs_id        = aws_efs_file_system.wordpress_fs.id
+  region        = var.aws_region
+  db_name       = var.db_name
+  db_username   = var.db_username
+  db_password   = var.db_password
+  db_host       = aws_db_instance.wordpress_db.address
+  DOMAIN_NAME   = var.DOMAIN_NAME
+  DEMO_USERNAME = var.DEMO_USERNAME
+  DEMO_PASSWORD = var.DEMO_PASSWORD
+  DEMO_EMAIL    = var.DEMO_EMAIL
+}))
+tag_specifications {
+resource_type = "instance"
+tags = {
+Name = "${var.project_name}-web"
+}
+}
+}
+
+
+
+# Auto Scaling Group para las instancias web
+resource "aws_autoscaling_group" "web_asg" {
+name_prefix = "${var.project_name}-asg-"
+launch_template {
+id = aws_launch_template.web_lt.id
+version = "$Latest"
+}
+vpc_zone_identifier = aws_subnet.private[*].id
+target_group_arns = [aws_lb_target_group.web.arn]
+desired_capacity = 2
+
+min_size = 2
+max_size = 4
+health_check_type = "EC2"
+health_check_grace_period = 90
+tag {
+key = "Name"
+value = "${var.project_name}-web"
+propagate_at_launch = true
+}
+}

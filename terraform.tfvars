@@ -1,0 +1,29 @@
+# =============================================================
+# terraform.tfvars.example
+# Copia aquest fitxer a terraform.tfvars i omple els valors
+# =============================================================
+
+aws_region   = "us-east-1"
+project_name = "aws-tf-josemi"
+
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
+
+instance_type = "t3.micro"
+
+# Genera la teua clau: ssh-keygen -t ed25519 -C "terraform"
+# Després copia el contingut de ~/.ssh/id_ed25519.pub
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIND1sz/pyHJK+MeJMwvqdk8wYf5ZUhd7yy7v0cHpLAaZ terraform-practica"
+
+# Nom de domini que has de tenir registrat i amb hosted zone a Route 53
+domain_name = "osemiolivares.net"
+
+health_check_path = "/"
+
+common_tags = {
+  Project     = "practica-terraform-aws"
+  Environment = "dev"
+  ManagedBy   = "Terraform"
+  Owner       = "Josep Olivares"
+}
