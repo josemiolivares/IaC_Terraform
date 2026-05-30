@@ -1,6 +1,42 @@
-# =============================================================
-# outputs.tf
-# =============================================================
+###############################################################
+# outputs.tf — Valors exportats
+###############################################################
+
+output "alb_dns_name" {
+  description = "DNS públic del balancejador de càrrega (ALB)"
+  value       = aws_lb.main.dns_name
+}
+
+output "alb_zone_id" {
+  description = "Zone ID de l'ALB (per a Route53)"
+  value       = aws_lb.main.zone_id
+}
+
+output "wordpress_url" {
+  description = "URL d'accés a WordPress"
+  value       = "http://${aws_lb.main.dns_name}"
+}
+
+output "rds_endpoint" {
+  description = "Endpoint de connexió a RDS MySQL"
+  value       = aws_db_instance.wordpress.address
+  sensitive   = true
+}
+
+output "rds_port" {
+  description = "Port de RDS MySQL"
+  value       = aws_db_instance.wordpress.port
+}
+
+output "efs_dns_name" {
+  description = "DNS de l'Elastic File System"
+  value       = aws_efs_file_system.wordpress.dns_name
+}
+
+output "efs_id" {
+  description = "ID de l'Elastic File System"
+  value       = aws_efs_file_system.wordpress.id
+}
 
 output "vpc_id" {
   description = "ID de la VPC"
@@ -9,55 +45,25 @@ output "vpc_id" {
 
 output "public_subnet_ids" {
   description = "IDs de les subnets públiques"
-  value       = aws_subnet.public[*].id
+  value       = { for k, s in aws_subnet.public : k => s.id }
 }
 
 output "private_subnet_ids" {
   description = "IDs de les subnets privades"
-  value       = aws_subnet.private[*].id
+  value       = { for k, s in aws_subnet.private : k => s.id }
 }
 
-output "alb_dns_name" {
-  description = "DNS name del Application Load Balancer"
-  value       = aws_lb.main.dns_name
+output "autoscaling_group_name" {
+  description = "Nom de l'Auto Scaling Group"
+  value       = aws_autoscaling_group.wordpress.name
 }
 
-output "alb_zone_id" {
-  description = "Zone ID del ALB (per a Route 53 alias)"
-  value       = aws_lb.main.zone_id
+output "launch_template_id" {
+  description = "ID del Launch Template"
+  value       = aws_launch_template.wordpress.id
 }
 
-output "alb_arn" {
-  description = "ARN del Application Load Balancer"
-  value       = aws_lb.main.arn
-}
-
-output "ec2_instance_ids" {
-  description = "IDs de les instàncies EC2"
-  value       = aws_instance.web[*].id
-}
-
-output "ec2_private_ips" {
-  description = "IPs privades de les instàncies EC2"
-  value       = aws_instance.web[*].private_ip
-}
-
-output "ec2_availability_zones" {
-  description = "AZs on estan desplegades les instàncies"
-  value       = aws_instance.web[*].availability_zone
-}
-
-output "certificate_arn" {
-  description = "ARN del certificat SSL/TLS"
-  value       = aws_acm_certificate.main.arn
-}
-
-output "website_url" {
-  description = "URL pública del lloc web"
-  value       = "https://${var.domain_name}"
-}
-
-output "nat_gateway_public_ips" {
-  description = "IPs públiques dels NAT Gateways"
-  value       = aws_eip.nat[*].public_ip
+output "nat_gateway_public_ip" {
+  description = "IP pública del NAT Gateway"
+  value       = aws_eip.nat.public_ip
 }

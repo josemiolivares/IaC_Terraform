@@ -1,9 +1,10 @@
-# =============================================================
-# main.tf - Infraestructura AWS amb HA en 2 AZs i HTTPS
-# =============================================================
+###############################################################
+# main.tf — Infraestructura WordPress HA a AWS (Terraform)
+# Arquitectura: ALB → EC2 (2 AZ) → RDS MySQL + EFS + NAT GW
+###############################################################
 
 terraform {
-  required_version = ">= 1.3.0"
+  required_version = ">= 1.6.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -16,15 +17,15 @@ provider "aws" {
   region = var.aws_region
 }
 
-# -------------------------------------------------------------
+###############################################################
 # DATA SOURCES
-# -------------------------------------------------------------
+###############################################################
 
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_ami" "amazon_linux" {
+data "aws_ami" "amazon_linux_2023" {
   most_recent = true
   owners      = ["amazon"]
 
@@ -39,103 +40,86 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# -------------------------------------------------------------
+###############################################################
 # VPC
-# -------------------------------------------------------------
+###############################################################
 
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
-  enable_dns_support   = true
   enable_dns_hostnames = true
+  enable_dns_support   = true
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-vpc"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-vpc" })
 }
 
-# -------------------------------------------------------------
+###############################################################
 # INTERNET GATEWAY
-# -------------------------------------------------------------
+###############################################################
 
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-igw"
-  })
+  tags   = merge(local.common_tags, { Name = "${var.project_name}-igw" })
 }
 
-# -------------------------------------------------------------
-# SUBNETS PÚBLIQUES (una per AZ)
-# -------------------------------------------------------------
+###############################################################
+# SUBNETS — Públiques (2 AZ)
+###############################################################
 
 resource "aws_subnet" "public" {
-  count = 2
+  for_each = {
+    a = { cidr = var.public_subnet_cidrs[0], az = data.aws_availability_zones.available.names[0] }
+    b = { cidr = var.public_subnet_cidrs[1], az = data.aws_availability_zones.available.names[1] }
+  }
 
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidrs[count.index]
-  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  cidr_block              = each.value.cidr
+  availability_zone       = each.value.az
   map_public_ip_on_launch = true
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-public-subnet-${count.index + 1}"
-    AZ   = data.aws_availability_zones.available.names[count.index]
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-public-subnet-${each.key}" })
 }
 
-# -------------------------------------------------------------
-# SUBNETS PRIVADES (una per AZ)
-# -------------------------------------------------------------
+###############################################################
+# SUBNETS — Privades (2 AZ)
+###############################################################
 
 resource "aws_subnet" "private" {
-  count = 2
+  for_each = {
+    a = { cidr = var.private_subnet_cidrs[0], az = data.aws_availability_zones.available.names[0] }
+    b = { cidr = var.private_subnet_cidrs[1], az = data.aws_availability_zones.available.names[1] }
+  }
 
   vpc_id            = aws_vpc.main.id
-  cidr_block        = var.private_subnet_cidrs[count.index]
-  availability_zone = data.aws_availability_zones.available.names[count.index]
+  cidr_block        = each.value.cidr
+  availability_zone = each.value.az
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-private-subnet-${count.index + 1}"
-    AZ   = data.aws_availability_zones.available.names[count.index]
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-private-subnet-${each.key}" })
 }
 
-# -------------------------------------------------------------
-# ELASTIC IPs per NAT Gateways
-# -------------------------------------------------------------
+###############################################################
+# ELASTIC IP + NAT GATEWAY (AZ-a, un únic per cost)
+# Per HA real, duplicar per a AZ-b
+###############################################################
 
 resource "aws_eip" "nat" {
-  count  = 2
   domain = "vpc"
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-eip-nat-${count.index + 1}"
-  })
-
-  depends_on = [aws_internet_gateway.main]
+  tags   = merge(local.common_tags, { Name = "${var.project_name}-nat-eip" })
 }
-
-# -------------------------------------------------------------
-# NAT GATEWAYS (un per AZ per a HA real)
-# -------------------------------------------------------------
 
 resource "aws_nat_gateway" "main" {
-  count = 2
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public["a"].id
 
-  allocation_id = aws_eip.nat[count.index].id
-  subnet_id     = aws_subnet.public[count.index].id
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-nat-gw-${count.index + 1}"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-nat-gw" })
 
   depends_on = [aws_internet_gateway.main]
 }
 
-# -------------------------------------------------------------
-# TAULES DE RUTES PÚBLIQUES
-# -------------------------------------------------------------
+###############################################################
+# ROUTE TABLES
+###############################################################
 
+# Pública → IGW
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -144,54 +128,45 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.main.id
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-rt-public"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-public-rt" })
 }
 
 resource "aws_route_table_association" "public" {
-  count = 2
-
-  subnet_id      = aws_subnet.public[count.index].id
+  for_each       = aws_subnet.public
+  subnet_id      = each.value.id
   route_table_id = aws_route_table.public.id
 }
 
-# -------------------------------------------------------------
-# TAULES DE RUTES PRIVADES (una per AZ)
-# -------------------------------------------------------------
-
+# Privada → NAT GW
 resource "aws_route_table" "private" {
-  count  = 2
   vpc_id = aws_vpc.main.id
 
   route {
     cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main[count.index].id
+    nat_gateway_id = aws_nat_gateway.main.id
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-rt-private-${count.index + 1}"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-private-rt" })
 }
 
 resource "aws_route_table_association" "private" {
-  count = 2
-
-  subnet_id      = aws_subnet.private[count.index].id
-  route_table_id = aws_route_table.private[count.index].id
+  for_each       = aws_subnet.private
+  subnet_id      = each.value.id
+  route_table_id = aws_route_table.private.id
 }
 
-# -------------------------------------------------------------
-# SECURITY GROUP - ALB
-# -------------------------------------------------------------
+###############################################################
+# SECURITY GROUPS
+###############################################################
 
+# ALB — accepta HTTP/HTTPS des d'Internet
 resource "aws_security_group" "alb" {
-  name        = "${var.project_name}-sg-alb"
-  description = "Permet HTTP (redireccio) i HTTPS des d_internet"
+  name        = "${var.project_name}-alb-sg"
+  description = "Allow HTTP/HTTPS from Internet"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "HTTP des d_internet (redireccio a HTTPS)"
+    description = "HTTP"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -199,7 +174,7 @@ resource "aws_security_group" "alb" {
   }
 
   ingress {
-    description = "HTTPS des d_internet"
+    description = "HTTPS"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -207,29 +182,23 @@ resource "aws_security_group" "alb" {
   }
 
   egress {
-    description = "Tot el trafic de sortida"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-sg-alb"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-alb-sg" })
 }
 
-# -------------------------------------------------------------
-# SECURITY GROUP - Instàncies EC2
-# -------------------------------------------------------------
-
-resource "aws_security_group" "ec2" {
-  name        = "${var.project_name}-sg-ec2"
-  description = "Permet trafic HTTP des del ALB i SSH des de bastio"
+# EC2 WordPress — accepta tràfic des de l'ALB
+resource "aws_security_group" "wordpress" {
+  name        = "${var.project_name}-wordpress-sg"
+  description = "Allow HTTP from ALB"
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "HTTP des del ALB"
+    description     = "HTTP from ALB"
     from_port       = 80
     to_port         = 80
     protocol        = "tcp"
@@ -237,7 +206,7 @@ resource "aws_security_group" "ec2" {
   }
 
   ingress {
-    description = "SSH des de la VPC"
+    description = "SSH from VPC (bastió intern)"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -245,234 +214,381 @@ resource "aws_security_group" "ec2" {
   }
 
   egress {
-    description = "Tot el trafic de sortida"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-sg-ec2"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-wordpress-sg" })
 }
 
-# -------------------------------------------------------------
-# KEY PAIR
-# -------------------------------------------------------------
+# RDS — accepta MySQL des de les instàncies WordPress
+resource "aws_security_group" "rds" {
+  name        = "${var.project_name}-rds-sg"
+  description = "Allow MySQL from WordPress EC2"
+  vpc_id      = aws_vpc.main.id
 
-resource "aws_key_pair" "main" {
-  key_name   = "${var.project_name}-key"
-  public_key = var.ssh_public_key
+  ingress {
+    description     = "MySQL from WordPress"
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.wordpress.id]
+  }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-key"
-  })
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-rds-sg" })
 }
 
-# -------------------------------------------------------------
-# INSTÀNCIES EC2 (una per AZ, en subxarxa privada)
-# -------------------------------------------------------------
+# EFS — accepta NFS des de les instàncies WordPress
+resource "aws_security_group" "efs" {
+  name        = "${var.project_name}-efs-sg"
+  description = "Allow NFS from WordPress EC2"
+  vpc_id      = aws_vpc.main.id
 
-resource "aws_instance" "web" {
-  count = 2
+  ingress {
+    description     = "NFS from WordPress"
+    from_port       = 2049
+    to_port         = 2049
+    protocol        = "tcp"
+    security_groups = [aws_security_group.wordpress.id]
+  }
 
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.main.key_name
-  subnet_id              = aws_subnet.private[count.index].id
-  vpc_security_group_ids = [aws_security_group.ec2.id]
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-  user_data = base64encode(templatefile("${path.module}/user_data.sh", {
-    project_name = var.project_name
-    az_index     = count.index + 1
+  tags = merge(local.common_tags, { Name = "${var.project_name}-efs-sg" })
+}
+
+###############################################################
+# EFS — Elastic File System (fitxers WordPress compartits)
+###############################################################
+
+resource "aws_efs_file_system" "wordpress" {
+  creation_token   = "${var.project_name}-efs"
+  performance_mode = "generalPurpose"
+  throughput_mode  = "bursting"
+  encrypted        = true
+
+  lifecycle_policy {
+    transition_to_ia = "AFTER_30_DAYS"
+  }
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-efs" })
+}
+
+resource "aws_efs_mount_target" "wordpress" {
+  for_each = aws_subnet.private
+
+  file_system_id  = aws_efs_file_system.wordpress.id
+  subnet_id       = each.value.id
+  security_groups = [aws_security_group.efs.id]
+}
+
+###############################################################
+# RDS — MySQL (Multi-AZ per HA)
+###############################################################
+
+resource "aws_db_subnet_group" "main" {
+  name       = "${var.project_name}-db-subnet-group"
+  subnet_ids = [for s in aws_subnet.private : s.id]
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-db-subnet-group" })
+}
+
+resource "aws_db_instance" "wordpress" {
+  identifier = "${var.project_name}-mysql"
+
+  engine               = "mysql"
+  engine_version       = "8.0"
+  instance_class       = var.db_instance_class
+  allocated_storage    = var.db_allocated_storage
+  max_allocated_storage = 100
+  storage_type         = "gp3"
+  storage_encrypted    = true
+
+  db_name  = var.db_name
+  username = var.db_username
+  password = var.db_password
+
+  multi_az               = true
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+  vpc_security_group_ids = [aws_security_group.rds.id]
+
+  backup_retention_period = 7
+  backup_window           = "03:00-04:00"
+  maintenance_window      = "Mon:04:00-Mon:05:00"
+
+  deletion_protection = var.db_deletion_protection
+  skip_final_snapshot = !var.db_deletion_protection
+  final_snapshot_identifier = var.db_deletion_protection ? "${var.project_name}-final-snapshot" : null
+
+  tags = merge(local.common_tags, { Name = "${var.project_name}-mysql" })
+}
+
+###############################################################
+# IAM ROLE per a EC2 (SSM Session Manager, CloudWatch)
+###############################################################
+
+resource "aws_iam_role" "wordpress_ec2" {
+  name = "${var.project_name}-ec2-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ec2.amazonaws.com" }
+    }]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.wordpress_ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_iam_role_policy_attachment" "cloudwatch" {
+  role       = aws_iam_role.wordpress_ec2.name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+}
+
+resource "aws_iam_instance_profile" "wordpress_ec2" {
+  name = "${var.project_name}-ec2-profile"
+  role = aws_iam_role.wordpress_ec2.name
+}
+
+###############################################################
+# LAUNCH TEMPLATE (user_data instal·la WordPress + munta EFS)
+###############################################################
+
+resource "aws_launch_template" "wordpress" {
+  name_prefix   = "${var.project_name}-lt-"
+  image_id      = data.aws_ami.amazon_linux_2023.id
+  instance_type = var.ec2_instance_type
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.wordpress_ec2.name
+  }
+
+  network_interfaces {
+    associate_public_ip_address = false
+    security_groups             = [aws_security_group.wordpress.id]
+  }
+
+  user_data = base64encode(templatefile("${path.module}/user_data.sh.tpl", {
+    efs_dns_name = aws_efs_file_system.wordpress.dns_name
+    db_host      = aws_db_instance.wordpress.address
+    db_name      = var.db_name
+    db_user      = var.db_username
+    db_pass      = var.db_password
+    wp_title     = var.wp_site_title
+    wp_admin     = var.wp_admin_user
+    wp_admin_pass = var.wp_admin_password
+    wp_admin_email = var.wp_admin_email
   }))
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-web-${count.index + 1}"
-    AZ   = data.aws_availability_zones.available.names[count.index]
-    Role = "webserver"
-  })
-}
+  monitoring {
+    enabled = true
+  }
 
-# -------------------------------------------------------------
-# ACM - Certificat SSL/TLS
-# (Opció A: certificat autogestionat importat)
-# (Opció B: certificat AWS Certificate Manager - recomanat)
-# -------------------------------------------------------------
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"  # IMDSv2
+    http_put_response_hop_limit = 1
+  }
 
-# NOTA: Si tens un domini propi, descomenta el bloc següent i
-# ajusta la variable domain_name. ACM validarà via DNS.
-# Si no tens domini, utilitza un certificat autosignat (veure README).
+  tag_specifications {
+    resource_type = "instance"
+    tags          = merge(local.common_tags, { Name = "${var.project_name}-wordpress" })
+  }
 
-resource "aws_acm_certificate" "main" {
-  domain_name               = var.domain_name
-  subject_alternative_names = ["www.${var.domain_name}"]
-  validation_method         = "DNS"
+  tag_specifications {
+    resource_type = "volume"
+    tags          = merge(local.common_tags, { Name = "${var.project_name}-wordpress-vol" })
+  }
 
   lifecycle {
     create_before_destroy = true
   }
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-cert"
-  })
 }
 
-# Validació DNS del certificat (requereix que gestionis el DNS)
-resource "aws_acm_certificate_validation" "main" {
-  certificate_arn         = aws_acm_certificate.main.arn
-  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
-
-  timeouts {
-    create = "10m"
-  }
-}
-
-# -------------------------------------------------------------
-# ROUTE 53 (si uses hosted zone propia)
-# -------------------------------------------------------------
-
-data "aws_route53_zone" "main" {
-  name         = var.domain_name
-  private_zone = false
-}
-
-resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.main.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
-
-  allow_overwrite = true
-  name            = each.value.name
-  records         = [each.value.record]
-  ttl             = 60
-  type            = each.value.type
-  zone_id         = data.aws_route53_zone.main.zone_id
-}
-
-resource "aws_route53_record" "alb" {
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = var.domain_name
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
-    evaluate_target_health = true
-  }
-}
-
-resource "aws_route53_record" "alb_www" {
-  zone_id = data.aws_route53_zone.main.zone_id
-  name    = "www.${var.domain_name}"
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
-    evaluate_target_health = true
-  }
-}
-
-# -------------------------------------------------------------
+###############################################################
 # APPLICATION LOAD BALANCER
-# -------------------------------------------------------------
+###############################################################
 
 resource "aws_lb" "main" {
   name               = "${var.project_name}-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb.id]
-  subnets            = aws_subnet.public[*].id
+  subnets            = [for s in aws_subnet.public : s.id]
 
   enable_deletion_protection = false
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-alb"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-alb" })
 }
 
-# -------------------------------------------------------------
-# TARGET GROUP
-# -------------------------------------------------------------
-
-resource "aws_lb_target_group" "web" {
-  name     = "${var.project_name}-tg-web"
-  port     = 80
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.main.id
+resource "aws_lb_target_group" "wordpress" {
+  name        = "${var.project_name}-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.main.id
+  target_type = "instance"
 
   health_check {
-    enabled             = true
+    path                = "/wp-login.php"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     timeout             = 5
     interval            = 30
-    path                = var.health_check_path
-    port                = "traffic-port"
-    protocol            = "HTTP"
-    matcher             = "200-299"
+    matcher             = "200"
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-tg-web"
-  })
+  tags = merge(local.common_tags, { Name = "${var.project_name}-tg" })
 }
 
-resource "aws_lb_target_group_attachment" "web" {
-  count = 2
-
-  target_group_arn = aws_lb_target_group.web.arn
-  target_id        = aws_instance.web[count.index].id
-  port             = 80
-}
-
-# -------------------------------------------------------------
-# LISTENER HTTP → redirecció a HTTPS
-# -------------------------------------------------------------
-
-resource "aws_lb_listener" "http_redirect" {
+resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
-    type = "redirect"
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.wordpress.arn
+  }
+}
 
-    redirect {
-      port        = "443"
-      protocol    = "HTTPS"
-      status_code = "HTTP_301"
+###############################################################
+# AUTO SCALING GROUP (EC2 en 2 AZ)
+###############################################################
+
+resource "aws_autoscaling_group" "wordpress" {
+  name                = "${var.project_name}-asg"
+  vpc_zone_identifier = [for s in aws_subnet.private : s.id]
+  target_group_arns   = [aws_lb_target_group.wordpress.arn]
+  health_check_type   = "ELB"
+  health_check_grace_period = 300
+
+  min_size         = var.asg_min_size
+  max_size         = var.asg_max_size
+  desired_capacity = var.asg_desired_capacity
+
+  launch_template {
+    id      = aws_launch_template.wordpress.id
+    version = "$Latest"
+  }
+
+  # Distribueix instàncies equitativament entre AZ
+  instance_distribution_policy {
+    on_demand_base_capacity                  = var.asg_min_size
+    on_demand_percentage_above_base_capacity = 100
+  }
+
+  tag {
+    key                 = "Name"
+    value               = "${var.project_name}-wordpress"
+    propagate_at_launch = true
+  }
+
+  dynamic "tag" {
+    for_each = local.common_tags
+    content {
+      key                 = tag.key
+      value               = tag.value
+      propagate_at_launch = true
     }
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-listener-http"
-  })
+  depends_on = [
+    aws_efs_mount_target.wordpress,
+    aws_db_instance.wordpress,
+  ]
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [desired_capacity]
+  }
 }
 
-# -------------------------------------------------------------
-# LISTENER HTTPS
-# -------------------------------------------------------------
+###############################################################
+# AUTO SCALING POLICIES (CPU-based)
+###############################################################
 
-resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.main.arn
-  port              = 443
-  protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-  certificate_arn   = aws_acm_certificate_validation.main.certificate_arn
+resource "aws_autoscaling_policy" "scale_out" {
+  name                   = "${var.project_name}-scale-out"
+  autoscaling_group_name = aws_autoscaling_group.wordpress.name
+  policy_type            = "TargetTrackingScaling"
 
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.web.arn
+  target_tracking_configuration {
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+    target_value = 70.0
+  }
+}
+
+###############################################################
+# CLOUDWATCH ALARMS
+###############################################################
+
+resource "aws_cloudwatch_metric_alarm" "rds_cpu_high" {
+  alarm_name          = "${var.project_name}-rds-cpu-high"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/RDS"
+  period              = 300
+  statistic           = "Average"
+  threshold           = 80
+  alarm_description   = "RDS CPU > 80%"
+
+  dimensions = {
+    DBInstanceIdentifier = aws_db_instance.wordpress.identifier
   }
 
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-listener-https"
-  })
+  tags = local.common_tags
+}
+
+resource "aws_cloudwatch_metric_alarm" "alb_5xx" {
+  alarm_name          = "${var.project_name}-alb-5xx"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "HTTPCode_ELB_5XX_Count"
+  namespace           = "AWS/ApplicationELB"
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 10
+  alarm_description   = "ALB respon amb errors 5xx"
+
+  dimensions = {
+    LoadBalancer = aws_lb.main.arn_suffix
+  }
+
+  tags = local.common_tags
+}
+
+###############################################################
+# LOCALS
+###############################################################
+
+locals {
+  common_tags = {
+    Project     = var.project_name
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  }
 }

@@ -1,68 +1,132 @@
-# =============================================================
-# variables.tf
-# =============================================================
+###############################################################
+# variables.tf — Paràmetres configurables
+###############################################################
 
 variable "aws_region" {
   description = "Regió AWS on desplegar la infraestructura"
   type        = string
-  default     = "eu-west-1"
+  default     = "us-east-1"
 }
 
 variable "project_name" {
-  description = "Nom del projecte (s'usa com a prefix per als recursos)"
+  description = "Nom del projecte (prefix per a tots els recursos)"
   type        = string
-  default     = "practica-tf"
+  default     = "wordpress-ha"
 }
 
+variable "environment" {
+  description = "Entorn (prod, staging, dev)"
+  type        = string
+  default     = "prod"
+}
+
+# ─── Xarxa ────────────────────────────────────────────────────
+
 variable "vpc_cidr" {
-  description = "Bloc CIDR de la VPC"
+  description = "CIDR block de la VPC"
   type        = string
   default     = "10.0.0.0/16"
 }
 
 variable "public_subnet_cidrs" {
-  description = "CIDRs per a les subnets públiques (una per AZ)"
+  description = "CIDRs de les subnets públiques (una per AZ)"
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
 
 variable "private_subnet_cidrs" {
-  description = "CIDRs per a les subnets privades (una per AZ)"
+  description = "CIDRs de les subnets privades (una per AZ)"
   type        = list(string)
   default     = ["10.0.11.0/24", "10.0.12.0/24"]
 }
 
-variable "instance_type" {
-  description = "Tipus d'instància EC2"
+# ─── EC2 / Auto Scaling ───────────────────────────────────────
+
+variable "ec2_instance_type" {
+  description = "Tipus d'instància EC2 per a WordPress"
   type        = string
-  default     = "t3.micro"
+  default     = "t3.small"
 }
 
-variable "ssh_public_key" {
-  description = "Clau pública SSH per accedir a les instàncies"
-  type        = string
-  # Afegeix la teua clau pública aquí o passa-la via terraform.tfvars
-  # Exemple: ssh-rsa AAAA... user@host
+variable "asg_min_size" {
+  description = "Nombre mínim d'instàncies a l'ASG"
+  type        = number
+  default     = 2  # Mínim 1 per AZ per a HA
 }
 
-variable "domain_name" {
-  description = "Nom de domini per al certificat SSL (ha d'existir a Route 53)"
-  type        = string
-  # Exemple: "example.com"
+variable "asg_max_size" {
+  description = "Nombre màxim d'instàncies a l'ASG"
+  type        = number
+  default     = 6
 }
 
-variable "health_check_path" {
-  description = "Ruta del health check del Target Group"
-  type        = string
-  default     = "/"
+variable "asg_desired_capacity" {
+  description = "Nombre desitjat d'instàncies a l'ASG"
+  type        = number
+  default     = 2
 }
 
-variable "common_tags" {
-  description = "Tags comuns per a tots els recursos"
-  type        = map(string)
-  default = {
-    Project     = "practica-terraform-aws"
-    Environment = "dev"
-    ManagedBy   = "Terraform"
-  }
+# ─── RDS ─────────────────────────────────────────────────────
+
+variable "db_instance_class" {
+  description = "Classe d'instància RDS"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_allocated_storage" {
+  description = "Emmagatzematge inicial RDS (GB)"
+  type        = number
+  default     = 20
+}
+
+variable "db_name" {
+  description = "Nom de la base de dades WordPress"
+  type        = string
+  default     = "wordpress"
+}
+
+variable "db_username" {
+  description = "Usuari administrador de la BD"
+  type        = string
+  default     = "wpuser"
+  sensitive   = true
+}
+
+variable "db_password" {
+  description = "Contrasenya de la BD (usar AWS Secrets Manager en producció)"
+  type        = string
+  sensitive   = true
+}
+
+variable "db_deletion_protection" {
+  description = "Activa protecció contra eliminació de la BD"
+  type        = bool
+  default     = true
+}
+
+# ─── WordPress ────────────────────────────────────────────────
+
+variable "wp_site_title" {
+  description = "Títol del lloc WordPress"
+  type        = string
+  default     = "El meu WordPress"
+}
+
+variable "wp_admin_user" {
+  description = "Usuari administrador de WordPress"
+  type        = string
+  default     = "admin"
+  sensitive   = true
+}
+
+variable "wp_admin_password" {
+  description = "Contrasenya de l'administrador de WordPress"
+  type        = string
+  sensitive   = true
+}
+
+variable "wp_admin_email" {
+  description = "Email de l'administrador de WordPress"
+  type        = string
 }

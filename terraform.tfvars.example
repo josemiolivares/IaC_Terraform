@@ -1,29 +1,35 @@
-# =============================================================
+###############################################################
 # terraform.tfvars.example
-# Copia aquest fitxer a terraform.tfvars i omple els valors
-# =============================================================
+# Copia aquest fitxer com a terraform.tfvars i omple els valors.
+# NO commitegis terraform.tfvars al control de versions!
+###############################################################
 
-aws_region   = "eu-west-1"
-project_name = "practica-tf"
+# ─── General ──────────────────────────────────────────────────
+aws_region   = "us-east-1"
+project_name = "wordpress-ha"
+environment  = "prod"
 
+# ─── Xarxa ────────────────────────────────────────────────────
 vpc_cidr             = "10.0.0.0/16"
 public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
 private_subnet_cidrs = ["10.0.11.0/24", "10.0.12.0/24"]
 
-instance_type = "t3.micro"
+# ─── EC2 / Auto Scaling ───────────────────────────────────────
+ec2_instance_type    = "t3.small"
+asg_min_size         = 2   # 1 instància per AZ
+asg_max_size         = 6
+asg_desired_capacity = 2
 
-# Genera la teua clau: ssh-keygen -t ed25519 -C "terraform"
-# Després copia el contingut de ~/.ssh/id_ed25519.pub
-ssh_public_key = "ssh-ed25519 AAAA... el-teu-usuari@host"
+# ─── RDS ─────────────────────────────────────────────────────
+db_instance_class      = "db.t3.micro"
+db_allocated_storage   = 20
+db_name                = "wordpress"
+db_username            = "wpuser"
+db_password            = "CANVIA_AQUESTA_CONTRASENYA_SEGURA!"
+db_deletion_protection = true
 
-# Nom de domini que has de tenir registrat i amb hosted zone a Route 53
-domain_name = "example.com"
-
-health_check_path = "/"
-
-common_tags = {
-  Project     = "practica-terraform-aws"
-  Environment = "dev"
-  ManagedBy   = "Terraform"
-  Owner       = "el-teu-nom"
-}
+# ─── WordPress ────────────────────────────────────────────────
+wp_site_title     = "El meu lloc WordPress"
+wp_admin_user     = "admin"
+wp_admin_password = "CANVIA_AQUESTA_CONTRASENYA_WP!"
+wp_admin_email    = "admin@exemple.com"

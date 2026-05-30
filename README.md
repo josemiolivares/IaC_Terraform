@@ -1,162 +1,127 @@
-# Pràctica Terraform AWS — HTTPS + Alta Disponibilitat (2 AZs)
+# WordPress HA a AWS — Terraform
+
+Infraestructura d'alta disponibilitat per a WordPress sobre AWS, replicant les instàncies EC2 en **dues zones de disponibilitat** (AZ).
 
 ## Arquitectura
 
 ```
 Internet
-    │
-    ▼
-┌──────────────────────────────────────────┐
-│         Application Load Balancer         │
-│    (Port 80 → redirect 301 a HTTPS)       │
-│    (Port 443 → TLS 1.3, cert ACM)         │
-└──────────┬────────────────────┬──────────┘
-           │                    │
-     AZ-1 (eu-west-1a)    AZ-2 (eu-west-1b)
-           │                    │
-    ┌──────▼──────┐      ┌──────▼──────┐
-    │  Subnet Pub │      │  Subnet Pub │
-    │  10.0.1.0/24│      │  10.0.2.0/24│
-    │  NAT GW #1  │      │  NAT GW #2  │
-    └──────┬──────┘      └──────┬──────┘
-           │                    │
-    ┌──────▼──────┐      ┌──────▼──────┐
-    │ Subnet Priv │      │ Subnet Priv │
-    │ 10.0.11.0/24│      │10.0.12.0/24 │
-    │  EC2 Web #1 │      │  EC2 Web #2 │
-    └─────────────┘      └─────────────┘
+   │
+   ▼
+Internet Gateway
+   │
+   ▼
+ALB (Application Load Balancer)  ──  subnets públiques (AZ-a, AZ-b)
+   │
+   ├──► EC2 WordPress (AZ-a, subnet privada)  ─┐
+   │                                            ├─► EFS (compartit entre instàncies)
+   └──► EC2 WordPress (AZ-b, subnet privada)  ─┘
+              │
+              ▼  (SQL)
+         RDS MySQL Multi-AZ
+              │
+         NAT Gateway (eixida a Internet per a actualitzacions)
 ```
 
-## Recursos desplegats
+### Components
 
-| Recurs | Quantitat | Descripció |
-|---|---|---|
-| VPC | 1 | 10.0.0.0/16 |
-| Subnets públiques | 2 | Una per AZ, amb IGW |
-| Subnets privades | 2 | Una per AZ, amb NAT GW |
-| Internet Gateway | 1 | Accés públic |
-| NAT Gateway | 2 | Un per AZ (HA real) |
-| Elastic IP | 2 | Per als NAT GWs |
-| EC2 (Amazon Linux 2023) | 2 | Una per AZ, en subxarxa privada |
-| Application Load Balancer | 1 | Multi-AZ, HTTPS |
-| Target Group | 1 | Health check configurat |
-| Listener HTTP (80) | 1 | Redirecció 301 → HTTPS |
-| Listener HTTPS (443) | 1 | TLS 1.3, certificat ACM |
-| Certificat ACM | 1 | Validat per DNS |
-| Route 53 Records | 3 | A (apex), A (www), CNAME validació cert |
-| Security Groups | 2 | Per ALB i per EC2 |
-| Key Pair | 1 | Accés SSH |
+| Component | Descripció |
+|-----------|------------|
+| **VPC** | `10.0.0.0/16` amb 2 subnets públiques i 2 privades |
+| **Internet Gateway** | Punt d'entrada/sortida públic |
+| **NAT Gateway** | Permet que les EC2 privades accedeixin a Internet |
+| **ALB** | Balanceja tràfic HTTP entre les instàncies de les 2 AZ |
+| **Auto Scaling Group** | Manté mínim 2 instàncies (1 per AZ), escala fins a 6 |
+| **Launch Template** | Configura les EC2 amb WordPress + EFS muntat |
+| **EC2 T3** | Instàncies WordPress en subnets privades |
+| **RDS MySQL 8.0** | Multi-AZ, còpies de seguretat 7 dies |
+| **EFS** | Sistema de fitxers compartit (wp-content, plugins, temes) |
+| **CloudWatch** | Alarmes CPU (RDS) i errors 5xx (ALB) |
+| **IAM** | Rol EC2 amb SSM (accés sense SSH) i CloudWatch Agent |
 
 ## Requisits previs
 
-1. **AWS CLI** configurat (`aws configure`)
-2. **Terraform** >= 1.3.0
-3. **Domini** registrat amb **Hosted Zone a Route 53**
-4. **Clau SSH** generada localment
+- [Terraform](https://www.terraform.io/downloads) >= 1.6.0
+- [AWS CLI](https://aws.amazon.com/cli/) configurat (`aws configure`)
+- Permisos IAM suficients (EC2, RDS, EFS, VPC, ALB, IAM, CloudWatch)
 
-## Configuració ràpida
+## Desplegament
 
-### 1. Clona / copia el projecte
+### 1. Clonar i configurar
 
 ```bash
 git clone <repo>
-cd practica-terraform-aws
-```
+cd terraform-wordpress
 
-### 2. Genera una clau SSH (si no en tens)
-
-```bash
-ssh-keygen -t ed25519 -C "terraform-practica" -f ~/.ssh/terraform_practica
-```
-
-### 3. Crea el fitxer `terraform.tfvars`
-
-```bash
 cp terraform.tfvars.example terraform.tfvars
+# Edita terraform.tfvars amb les teves dades reals
+nano terraform.tfvars
 ```
 
-Edita `terraform.tfvars` i omple:
-- `ssh_public_key` → contingut de `~/.ssh/terraform_practica.pub`
-- `domain_name` → el teu domini (ha d'existir a Route 53)
-
-### 4. Desplega
+### 2. Inicialitzar Terraform
 
 ```bash
 terraform init
-terraform plan
-terraform apply
 ```
 
-> ⚠️ La validació del certificat ACM pot trigar 5-10 minuts.
-
-### 5. Verifica
-
-Un cop desplegat, comprova:
+### 3. Revisar el pla
 
 ```bash
-# Obtenir la URL
-terraform output website_url
-
-# Provar HTTP (ha de redirigir a HTTPS)
-curl -I http://<el-teu-domini>
-
-# Provar HTTPS
-curl -I https://<el-teu-domini>
+terraform plan -out=tfplan
 ```
 
-Cada recàrrega del navegador pot mostrar un servidor diferent (AZ-1 o AZ-2).
+### 4. Aplicar
 
-## Opció sense domini (certificat autosignat)
-
-Si no tens un domini, pots provar l'arquitectura sense HTTPS i accedir directament al DNS del ALB:
-
-1. Comenta els blocs `aws_acm_certificate`, `aws_acm_certificate_validation`, `aws_route53_*` a `main.tf`
-2. Canvia el listener HTTPS per HTTP o usa un certificat autosignat importat
-3. Accedeix via: `http://<alb_dns_name>`
-
-## Alta disponibilitat — explicació
-
-| Component | Estratègia HA |
-|---|---|
-| EC2 | 1 instància per AZ (AZ-1 i AZ-2) |
-| NAT Gateway | 1 per AZ (evita single point of failure) |
-| ALB | Natiu multi-AZ, distribueix tràfic automàticament |
-| Subnets | Públiques i privades en cada AZ |
-| Target Group | Health checks actius — exclou instàncies no sanes |
-
-### Flux de tràfic (HTTPS)
-
-```
-Usuari
-  → Port 80 HTTP → ALB → Redirect 301 → HTTPS
-  → Port 443 HTTPS → ALB (termina TLS) → HTTP intern → EC2 (AZ-1 o AZ-2)
+```bash
+terraform apply tfplan
 ```
 
-El TLS es termina al ALB. Les instàncies EC2 reben tràfic HTTP intern (el canal extern ja és xifrat).
+La instal·lació tarda ~15-20 minuts (principalment l'RDS Multi-AZ).
+
+### 5. Accedir a WordPress
+
+```bash
+terraform output wordpress_url
+```
+
+## Estructura de fitxers
+
+```
+terraform-wordpress/
+├── main.tf                  # Tots els recursos AWS
+├── variables.tf             # Definició de variables
+├── outputs.tf               # Valors exportats
+├── user_data.sh.tpl         # Script d'inicialització EC2
+├── terraform.tfvars.example # Exemple de configuració
+└── README.md
+```
 
 ## Seguretat
 
-- Les EC2 estan en **subnets privades** (no accessibles des d'internet)
-- El **Security Group del ALB** permet 80/443 des de 0.0.0.0/0
-- El **Security Group de les EC2** permet port 80 **únicament des del SG del ALB**
-- SSH a les EC2 **només des de la VPC** (necessites un bastió o SSM Session Manager)
-- Política TLS: `ELBSecurityPolicy-TLS13-1-2-2021-06` (TLS 1.2 mínim, TLS 1.3 preferit)
+- Les instàncies EC2 estan en **subnets privades** (sense IP pública)
+- Accés SSH substituït per **AWS Systems Manager Session Manager**
+- IMDSv2 obligatori a totes les instàncies
+- RDS i EFS xifrats en repòs
+- Security Groups mínims (principi de mínim privilegi)
 
-## Neteja
+> ⚠️ **Important**: No commitegis `terraform.tfvars` al control de versions. Afegeix-lo al `.gitignore`.
+
+## Eliminació
 
 ```bash
+# Desactivar protecció RDS si estava activada
+terraform apply -var="db_deletion_protection=false"
+
 terraform destroy
 ```
 
-## Costos aproximats (us-east-1 / eu-west-1)
+## Consideracions de cost (estimació us-east-1)
 
-| Recurs | Cost mensual estimat |
-|---|---|
-| 2× EC2 t3.micro | ~$15 |
-| 2× NAT Gateway | ~$65 |
-| ALB | ~$20 + $0.008/LCU |
-| ACM Certificat | Gratuït |
-| Route 53 Hosted Zone | $0.50 |
-| **Total estimat** | **~$100/mes** |
-
-> 💡 Per reduir costos en entorn de proves: usa 1 NAT Gateway (perd HA a nivell de xarxa privada) canviant `count = 2` a `count = 1` als recursos NAT.
+| Recurs | Estimació mensual |
+|--------|------------------|
+| 2× EC2 t3.small | ~$30 |
+| RDS db.t3.micro Multi-AZ | ~$30 |
+| ALB | ~$20 |
+| NAT Gateway | ~$35 |
+| EFS (20 GB) | ~$6 |
+| **Total estimat** | **~$121/mes** |
