@@ -3,15 +3,15 @@
 # =============================================================
 
 variable "aws_region" {
-  description = "Regió AWS on desplegar la infraestructura"
+  description = "Regio AWS on desplegar la infraestructura"
   type        = string
-  default     = "eu-west-1"
+  default     = "us-east-1"
 }
 
 variable "project_name" {
-  description = "Nom del projecte (s'usa com a prefix per als recursos)"
+  description = "Nom del projecte (s_usa com a prefix per als recursos)"
   type        = string
-  default     = "practica-tf"
+  default     = "aws-tf-josemi"
 }
 
 variable "vpc_cidr" {
@@ -21,7 +21,7 @@ variable "vpc_cidr" {
 }
 
 variable "public_subnet_cidrs" {
-  description = "CIDRs per a les subnets públiques (una per AZ)"
+  description = "CIDRs per a les subnets publiques (una per AZ)"
   type        = list(string)
   default     = ["10.0.1.0/24", "10.0.2.0/24"]
 }
@@ -33,21 +33,22 @@ variable "private_subnet_cidrs" {
 }
 
 variable "instance_type" {
-  description = "Tipus d'instància EC2"
+  description = "Tipus d_instancia EC2"
   type        = string
   default     = "t3.micro"
 }
 
 variable "ssh_public_key" {
-  description = "Clau pública SSH per accedir a les instàncies"
+  description = "Clau publica SSH per accedir a les instancies"
   type        = string
   # Afegeix la teua clau pública aquí o passa-la via terraform.tfvars
   # Exemple: ssh-rsa AAAA... user@host
 }
 
 variable "domain_name" {
-  description = "Nom de domini per al certificat SSL (ha d'existir a Route 53)"
+  description = "Nom de domini per al certificat SSL (ha d_existir a Route 53)"
   type        = string
+  default = awstf1.josemiolivares.net
   # Exemple: "example.com"
 }
 
@@ -65,4 +66,47 @@ variable "common_tags" {
     Environment = "dev"
     ManagedBy   = "Terraform"
   }
+}
+
+# Parámetros para la base de datos (RDS MySQL)
+variable "db_name" {
+description = "Nombre de la base de datos de WordPress en RDS"
+type = string
+default = "wordpress"
+}
+variable "db_username" {
+description = "Usuario administrador de la base de datos RDS"
+type = string
+default = "admin"
+}
+variable "db_password" {
+description = "Contraseña del usuario de la base de datos RDS"
+type = string
+default = "PAssw0rd1234" # En entorno real, usar una contraseña segura y no hardcodeada
+sensitive = true # Marcar como sensible para no mostrar en salida de Terraform
+}
+
+variable "DOMAIN_NAME" {
+  type        = string
+  description = "Dominio para la instalación de WordPress"
+  default     = "wordpress-iac-tf.josemolivares.net"
+}
+
+variable "DEMO_USERNAME" {
+  type        = string
+  description = "Usuario administrador para WordPress"
+  default     = "wpadmin"
+}
+
+variable "DEMO_PASSWORD" {
+  type        = string
+  description = "Contraseña administrador para WordPress"
+  default     = "wppassword123"
+  sensitive = true # Marcar como sensible para no mostrar en salida de Terraform
+}
+
+variable "DEMO_EMAIL" {
+  type        = string
+  description = "Email administrador para WordPress"
+  default     = "josemiolivares@gmail.com"
 }

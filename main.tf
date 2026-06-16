@@ -24,26 +24,13 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
 
 # -------------------------------------------------------------
 # VPC
 # -------------------------------------------------------------
 
 resource "aws_vpc" "main" {
+ 
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
@@ -105,7 +92,8 @@ resource "aws_subnet" "private" {
 # -------------------------------------------------------------
 
 resource "aws_eip" "nat" {
-  count  = 2
+  count  = 1
+#  1 per estalviar
   domain = "vpc"
 
   tags = merge(var.common_tags, {
@@ -120,7 +108,8 @@ resource "aws_eip" "nat" {
 # -------------------------------------------------------------
 
 resource "aws_nat_gateway" "main" {
-  count = 2
+  count = 1
+# posem 1 per a reduir costos en az1 public
 
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
@@ -276,8 +265,9 @@ resource "aws_key_pair" "main" {
 
 resource "aws_instance" "web" {
   count = 2
-
-  ami                    = data.aws_ami.amazon_linux.id
+  ami           = "ami-00e801948462f718a"
+ # instance_type = "t3.micro"
+ # ami                    = data.aws_ami.amazon_linux.id
   instance_type          = var.instance_type
   key_name               = aws_key_pair.main.key_name
   subnet_id              = aws_subnet.private[count.index].id
@@ -304,25 +294,17 @@ resource "aws_instance" "web" {
 # NOTA: Si tens un domini propi, descomenta el bloc següent i
 # ajusta la variable domain_name. ACM validarà via DNS.
 # Si no tens domini, utilitza un certificat autosignat (veure README).
-
-resource "aws_acm_certificate" "main" {
-  domain_name               = var.domain_name
-  subject_alternative_names = ["www.${var.domain_name}"]
-  validation_method         = "DNS"
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  tags = merge(var.common_tags, {
-    Name = "${var.project_name}-cert"
-  })
+data "aws_acm_certificate" "main" {
+  domain      = "josemolivares.aws.amazon.com"
+  statuses    = ["ISSUED"]
+  most_recent = true
 }
+
 
 # Validació DNS del certificat (requereix que gestionis el DNS)
 resource "aws_acm_certificate_validation" "main" {
   certificate_arn         = aws_acm_certificate.main.arn
-  validation_record_fqdns = [for record in aws_route53_record.cert_validation : record.fqdn]
+  validation_record_fqdns = josemolivares.aws.amazon.com
 
   timeouts {
     create = "10m"
@@ -334,7 +316,7 @@ resource "aws_acm_certificate_validation" "main" {
 # -------------------------------------------------------------
 
 data "aws_route53_zone" "main" {
-  name         = var.domain_name
+  name         = josemiolivares.aws.amazon.com
   private_zone = false
 }
 
@@ -475,4 +457,105 @@ resource "aws_lb_listener" "https" {
   tags = merge(var.common_tags, {
     Name = "${var.project_name}-listener-https"
   })
+}
+
+# Sistema de archivos EFS
+resource "aws_efs_file_system" "wordpress_fs" {
+provisioned_throughput_in_mibps = 0
+throughput_mode = "bursting"
+encrypted = false
+tags = {
+Name = "${var.project_name}-efs"
+}
+}
+
+# Crear un Mount Target de EFS en cada subred privada
+resource "aws_efs_mount_target" "efs_mount" {
+count = length(var.private_subnets_cidrs)
+file_system_id = aws_efs_file_system.wordpress_fs.id
+subnet_id = aws_subnet.private[count.index].id
+security_groups = [aws_security_group.efs_sg.id]
+}
+
+
+# Subnet Group para RDS (usar subredes privadas)
+resource "aws_db_subnet_group" "rds_subnets" {
+name = "${var.project_name}-rds-subnetgrp"
+subnet_ids = aws_subnet.private[*].id
+tags = {
+Name = "${var.project_name}-rds-subnetgrp"
+}
+}
+
+resource "aws_db_instance" "wordpress_db" {
+  identifier             = "${var.project_name}-db"
+  engine                 = "mysql"
+  engine_version         = "8.0"
+  instance_class         = "db.t3.micro"
+  allocated_storage      = 20
+  db_name                = var.db_name
+  username               = var.db_username
+  password               = var.db_password  
+  db_subnet_group_name   = aws_db_subnet_group.rds_subnets.name
+  vpc_security_group_ids = [aws_security_group.db_sg.id]
+  publicly_accessible    = false
+  skip_final_snapshot    = true
+  deletion_protection    = false
+
+  tags = {
+    Name = "${var.project_name}-db"
+  }
+}
+
+
+# SG para la base de datos (RDS)
+resource "aws_security_group" "db_sg" {
+name = "${var.project_name}-db-sg"
+description = "Permitir acceso MySQL desde servidores web"
+vpc_id = aws_vpc.main_vpc.id
+
+ingress {
+description = "MySQL desde Web SG"
+from_port = 3306
+to_port = 3306
+protocol = "tcp"
+security_groups = [aws_security_group.ec2.id] # solo desde instancias con web_sg
+}
+
+egress {
+from_port = 0
+to_port = 0
+protocol = "-1"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+tags = {
+Name = "${var.project_name}-db-sg"
+}
+}
+
+# SG para EFS (sistema de archivos)
+resource "aws_security_group" "efs_sg" {
+name = "${var.project_name}-efs-sg"
+description = "Permitir acceso NFS (EFS) desde servidores web"
+vpc_id = aws_vpc.main_vpc.id
+ingress {
+description = "NFS desde Web SG"
+from_port = 2049
+to_port = 2049
+protocol = "tcp"
+security_groups = [aws_security_group.ec2.id]
+}
+
+egress {
+from_port = 0
+to_port = 0
+protocol = "-1"
+cidr_blocks = ["0.0.0.0/0"]
+}
+
+
+tags = {
+Name = "${var.project_name}-efs-sg"
+}
 }
